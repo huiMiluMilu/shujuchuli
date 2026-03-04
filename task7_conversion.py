@@ -23,8 +23,8 @@ T_COL_PERIOD = 9
 def task7_conversion_stats(spreadsheet_token: str):
     print("\n[任务7] 开始处理...")
 
-    # 读取全部学员名单（终），构建 uid -> 期名称
-    t_sheet = find_sheet_by_name(spreadsheet_token, "全部学员名单（终）")
+    # 读取全部学员名单，构建 uid -> 期名称
+    t_sheet = find_sheet_by_name(spreadsheet_token, "全部学员名单")
     t_rows = read_sheet_values(spreadsheet_token, t_sheet["sheet_id"])
     uid_to_period = {}
     for row in t_rows[1:]:
@@ -56,7 +56,10 @@ def task7_conversion_stats(spreadsheet_token: str):
     period_values = []
     for row in o_data:
         uid = str(row[O_COL_UNIONID]).strip() if O_COL_UNIONID < len(row) and row[O_COL_UNIONID] else ""
-        period_values.append([uid_to_period.get(uid, "")])
+        if uid:
+            period_values.append([uid_to_period.get(uid, "未知渠道")])
+        else:
+            period_values.append([""])
 
     write_sheet_values(spreadsheet_token, o_sid,
                        f"{new_col_letter}2:{new_col_letter}{len(o_data)+1}",

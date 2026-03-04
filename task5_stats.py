@@ -33,11 +33,11 @@ CHANNEL_CONFIG = [
 def task5_stats(spreadsheet_token: str):
     print("\n[任务5] 开始统计...")
 
-    # 读取全部学员名单（终）
-    t_sheet = find_sheet_by_name(spreadsheet_token, "全部学员名单（终）")
+    # 读取全部学员名单
+    t_sheet = find_sheet_by_name(spreadsheet_token, "全部学员名单")
     t_rows = read_sheet_values(spreadsheet_token, t_sheet["sheet_id"])
     t_data = t_rows[1:]
-    print(f"全部学员名单（终）共 {len(t_data)} 行")
+    print(f"全部学员名单共 {len(t_data)} 行")
 
     # 读取 AI BOSS
     b_sheet = find_sheet_by_name(spreadsheet_token, "AI BOSS")

@@ -5,12 +5,12 @@
 """
 
 from feishu_client import (
-    parse_feishu_url, find_sheet_by_name,
+    find_sheet_by_name,
     read_sheet_values, write_sheet_values
 )
 from task3_dedup_merge import col_letter
 
-# 直播表列索引
+# 直播表列索引（默认值，运行时动态检测）
 L_COL_UNIONID = 6       # G 列：直播间 unionid
 L_COL_DURATION = 7      # H 列：停留时长(分钟)
 L_COL_PERIOD = 11       # L 列：期名称（原表已有）
@@ -20,25 +20,13 @@ T_COL_UNIONID = 1       # B
 T_COL_PERIOD = 9        # J
 
 # 数据汇总各直播区域起始列（0-based）
-# 直播1: M(12)-R(17)，直播2: S(18)-X(23)，直播3: Y(24)-AD(29)
-# 每区域列顺序：到播人数, 到播率, 有效观看人数, 有效观看比例, 作业提交数(跳过), 作业提交率(跳过)
 LIVE_CONFIG = [
     ("直播1", 12),  # M列起
     ("直播2", 18),  # S列起
     ("直播3", 24),  # Y列起
 ]
 
-# 渠道配置（与任务5保持一致）
-CHANNEL_CONFIG = [
-    (4,  "exact",   "芳群（二维码）"),
-    (5,  "exact",   "雪楠（二维码）"),
-    (6,  "keyword", "坚平"),
-    (7,  "keyword", "老师"),
-    (8,  "exact",   "芳群（二维码）"),
-    (9,  "exact",   "雪楠（二维码）"),
-    (10, "exact",   "未匹配到渠道"),
-]
-# 正确渠道行配置（行号, 模式, 关键词）
+# 渠道行配置（行号, 模式, 关键词）
 CHANNEL_ROWS = [
     (4,  "keyword", "芳群"),
     (5,  "keyword", "雪楠"),
@@ -46,25 +34,71 @@ CHANNEL_ROWS = [
     (7,  "keyword", "老师"),
     (8,  "exact",   "芳群（二维码）"),
     (9,  "exact",   "雪楠（二维码）"),
-    (10, "exact",   "未匹配到渠道"),
+    (10, "exact",   {"未匹配到渠道", "未知渠道"}),  # 两种值都归入未知渠道
 ]
 EXACT_CHANNELS = {"芳群（二维码）", "雪楠（二维码）", "未匹配到渠道"}
 
 VALID_WATCH_MINUTES = 30  # 有效观看阈值
 
 
-def match_period(period: str, mode: str, keyword: str) -> bool:
+def match_period(period: str, mode: str, keyword) -> bool:
     if mode == "exact":
+        if isinstance(keyword, (set, list, tuple)):
+            return period in keyword
         return period == keyword
     else:
         return keyword in period and period not in EXACT_CHANNELS
 
 
+def _is_number(v) -> bool:
+    try:
+        float(str(v))
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _detect_uid_col(header: list, data: list) -> int:
+    """动态找实际含 unionid（o7...）的列，优先非「风变」列"""
+    counts = {}
+    for row in data:
+        for i, v in enumerate(row):
+            s = str(v).strip() if v else ""
+            if s.startswith('o7') and len(s) > 15:
+                counts[i] = counts.get(i, 0) + 1
+    if not counts:
+        return L_COL_UNIONID
+    # 优先选非「风变」列
+    non_fv = {i: c for i, c in counts.items()
+              if i >= len(header) or '风变' not in str(header[i] or '')}
+    pool = non_fv if non_fv else counts
+    return max(pool, key=lambda i: (pool[i], -i))
+
+
+def _detect_dur_col(header: list, data: list, uid_col: int) -> int:
+    """动态找实际含停留时长（数值）的列"""
+    # 先按 header 名称找
+    for i, h in enumerate(header):
+        if h and '停留时长' in str(h):
+            nums = sum(1 for row in data
+                       if i < len(row) and row[i] is not None and _is_number(row[i]))
+            if nums > len(data) // 3:
+                return i
+    # 找紧跟 uid_col 之后的数值列
+    for offset in range(1, 5):
+        col = uid_col + offset
+        nums = sum(1 for row in data
+                   if col < len(row) and row[col] is not None and _is_number(row[col]))
+        if nums > len(data) // 3:
+            return col
+    return L_COL_DURATION
+
+
 def task6_live_stats(spreadsheet_token: str):
     print("\n[任务6] 开始处理...")
 
-    # 读取全部学员名单（终），构建 uid -> 期名称
-    t_sheet = find_sheet_by_name(spreadsheet_token, "全部学员名单（终）")
+    # 读取全部学员名单，构建 uid -> 期名称
+    t_sheet = find_sheet_by_name(spreadsheet_token, "全部学员名单")
     t_rows = read_sheet_values(spreadsheet_token, t_sheet["sheet_id"])
     uid_to_period = {}
     for row in t_rows[1:]:
@@ -78,7 +112,6 @@ def task6_live_stats(spreadsheet_token: str):
     s_sheet = find_sheet_by_name(spreadsheet_token, "数据汇总")
     s_sid = s_sheet["sheet_id"]
     s_rows = read_sheet_values(spreadsheet_token, s_sid, "A1:AE12")
-    # D列(索引3)，行4-11对应数据行
     d_col = {}
     for i, row in enumerate(s_rows):
         feishu_row = i + 1
@@ -105,21 +138,26 @@ def task6_live_stats(spreadsheet_token: str):
             _write_zeros(spreadsheet_token, s_sid, col_start)
             continue
 
+        # 动态检测 uid 列和停留时长列
+        uid_col = _detect_uid_col(l_header, l_data)
+        dur_col = _detect_dur_col(l_header, l_data, uid_col)
+        uid_header = l_header[uid_col] if uid_col < len(l_header) else '?'
+        dur_header = l_header[dur_col] if dur_col < len(l_header) else '?'
+        print(f"  uid列={uid_col}({uid_header}), 时长列={dur_col}({dur_header})")
+
         # 步骤1：预处理回填期名称到最后一列（新增列）
-        # 找最后非空列
         last_col = len(l_header)
         while last_col > 0 and not l_header[last_col - 1]:
             last_col -= 1
-        new_col_idx = last_col  # 新增列索引（0-based）
-        new_col_letter = col_letter(new_col_idx)
-
-        print(f"  期名称回填到第 {new_col_idx+1} 列（{new_col_letter}列）")
+        new_col_letter = col_letter(last_col)
+        print(f"  期名称回填到第 {last_col+1} 列（{new_col_letter}列）")
 
         period_values = []
         for row in l_data:
-            uid = str(row[L_COL_UNIONID]).strip() if L_COL_UNIONID < len(row) and row[L_COL_UNIONID] else ""
-            # 优先用原表已有期名称，无则从全部学员名单匹配
-            orig_period = str(row[L_COL_PERIOD]).strip() if L_COL_PERIOD < len(row) and row[L_COL_PERIOD] else ""
+            uid = str(row[uid_col]).strip() if uid_col < len(row) and row[uid_col] else ""
+            # 原表期名称：跳过纯数字（这是期ID而非期名称）
+            raw = row[L_COL_PERIOD] if L_COL_PERIOD < len(row) else None
+            orig_period = str(raw).strip() if raw and not _is_number(raw) else ""
             if orig_period:
                 period_values.append([orig_period])
             elif uid in uid_to_period:
@@ -133,24 +171,21 @@ def task6_live_stats(spreadsheet_token: str):
         print(f"  期名称回填完成")
 
         # 步骤2：按渠道统计到播人数和有效观看人数
-        # 构建每行的 (期名称, 停留时长)
         row_data = []
         for i, row in enumerate(l_data):
             period = period_values[i][0]
             try:
-                duration = float(row[L_COL_DURATION]) if L_COL_DURATION < len(row) and row[L_COL_DURATION] else 0
+                duration = float(row[dur_col]) if dur_col < len(row) and row[dur_col] else 0
             except (ValueError, TypeError):
                 duration = 0
             row_data.append((period, duration))
 
-        # 计算每渠道数据，写入数据汇总
-        result_rows = {}  # 飞书行号 -> [到播, 到播率, 有效观看, 有效观看比例, 0, 0]
-
+        result_rows = {}
         total_arrive = 0
         total_valid = 0
 
         for feishu_row, mode, keyword in CHANNEL_ROWS:
-            arrive = sum(1 for p, d in row_data if match_period(p, mode, keyword))
+            arrive = sum(1 for p, _ in row_data if match_period(p, mode, keyword))
             valid = sum(1 for p, d in row_data if match_period(p, mode, keyword) and d > VALID_WATCH_MINUTES)
             d_base = d_col.get(feishu_row, 0)
             arrive_rate = f"{arrive/d_base*100:.1f}%" if d_base > 0 else "/"
@@ -160,7 +195,6 @@ def task6_live_stats(spreadsheet_token: str):
             total_valid += valid
             print(f"  行{feishu_row}: 到播={arrive}({arrive_rate}), 有效观看={valid}({valid_rate})")
 
-        # 合计行
         d_total = d_col.get(11, 0)
         result_rows[11] = [
             total_arrive,
@@ -171,9 +205,6 @@ def task6_live_stats(spreadsheet_token: str):
         ]
         print(f"  合计: 到播={total_arrive}, 有效观看={total_valid}")
 
-        # 写入数据汇总
-        col_start_letter = col_letter(col_start)
-        col_end_letter = col_letter(col_start + 5)
         for feishu_row, vals in result_rows.items():
             write_sheet_values(spreadsheet_token, s_sid,
                                f"{col_letter(col_start)}{feishu_row}:{col_letter(col_start+5)}{feishu_row}",

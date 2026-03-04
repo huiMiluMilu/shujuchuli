@@ -71,8 +71,4 @@ def task4_final_member_list(spreadsheet_token: str):
     write_sheet_values(spreadsheet_token, t_sid, f"I2:I{n+1}", add_time_col)
     print("H列（是否添加）、I列（添加时间）写入完成")
 
-    # 5. 更名
-    rename_sheet(spreadsheet_token, t_sid, "全部学员名单（终）")
-    print("全部学员名单 → 全部学员名单（终）")
-
     print(f"[任务4] 完成！")

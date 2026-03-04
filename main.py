@@ -1,6 +1,8 @@
-"""主入口：数据处理 skill（交互模式）"""
+"""主入口：数据处理 skill"""
 
+import sys
 from feishu_client import parse_feishu_url, get_sheets_meta
+from reset import reset_from_task
 from task1_channel_mark import task1_mark_channel
 from task2_invite_match import task2_invite_match
 from task3_dedup_merge import task3_dedup_and_merge
@@ -9,9 +11,28 @@ from task5_stats import task5_stats
 from task6_live_stats import task6_live_stats
 from task7_conversion import task7_conversion_stats
 
+TASKS = {
+    1: ("进群渠道归属标记",   task1_mark_channel),
+    2: ("基于成员邀请匹配",   task2_invite_match),
+    3: ("跨表去重与全量汇总", task3_dedup_and_merge),
+    4: ("助教好友关联",       task4_final_member_list),
+    5: ("导流漏斗统计",       task5_stats),
+    6: ("直播转化统计",       task6_live_stats),
+    7: ("订单转化统计",       task7_conversion_stats),
+}
+
+
+def run_tasks_from(spreadsheet_token: str, start: int):
+    for i in range(start, 8):
+        print(f"\n{'=' * 40}")
+        print(f">>> 任务 {i}：{TASKS[i][0]}")
+        TASKS[i][1](spreadsheet_token)
+    print(f"\n{'=' * 40}")
+    print("全部任务执行完毕！")
+
 
 def main():
-    print("=== 飞书数据处理 Skill (交互模式) ===\n")
+    print("=== 飞书数据处理 Skill ===\n")
 
     url = input("请粘贴飞书电子表格链接：> ").strip()
     spreadsheet_token, _ = parse_feishu_url(url)
@@ -22,40 +43,34 @@ def main():
     for i, s in enumerate(sheets, 1):
         print(f"  {i}. {s['title']}")
 
+    # 自动执行任务 1-7
+    run_tasks_from(spreadsheet_token, 1)
+
+    # 询问是否重跑
     while True:
-        print("\n" + "=" * 40)
-        print("请选择要执行的任务（输入 q 退出）：")
-        print("  1. 进群渠道归属标记 (Task 1)")
-        print("  2. 基于成员邀请匹配 (Task 2)")
-        print("  3. 跨表去重与全量汇总 (Task 3)")
-        print("  4. 助教好友关联 (Task 4)")
-        print("  5. 导流漏斗统计 (Task 5)")
-        print("  6. 直播转化统计 (Task 6)")
-        print("  7. 订单转化统计 (Task 7)")
-        print("  q. 退出程序")
-
-        choice = input("> ").strip().lower()
-
-        if choice == "q":
+        print()
+        print("任务列表：")
+        for num, (name, _) in TASKS.items():
+            print(f"  {num}. {name}")
+        answer = input("要重新跑任务吗？（输入任务号从该任务开始重跑，直接回车或输入 q 退出）：> ").strip().lower()
+        if answer == "q" or answer == "":
             print("退出程序，拜拜！")
             break
-        elif choice == "1":
-            task1_mark_channel(spreadsheet_token)
-        elif choice == "2":
-            task2_invite_match(spreadsheet_token)
-        elif choice == "3":
-            task3_dedup_and_merge(spreadsheet_token)
-        elif choice == "4":
-            task4_final_member_list(spreadsheet_token)
-        elif choice == "5":
-            task5_stats(spreadsheet_token)
-        elif choice == "6":
-            task6_live_stats(spreadsheet_token)
-        elif choice == "7":
-            task7_conversion_stats(spreadsheet_token)
+        elif answer.isdigit() and 1 <= int(answer) <= 7:
+            start = int(answer)
+            reset_from_task(spreadsheet_token, start)
+            run_tasks_from(spreadsheet_token, start)
         else:
-            print("输入无效，请重新选择。")
+            print("输入无效，请输入 1-7 或 q。")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n[错误] {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if sys.platform == "win32":
+            input("\n按回车键退出...")
