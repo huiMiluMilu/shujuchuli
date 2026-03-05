@@ -1,12 +1,12 @@
 """
 任务6：直播转化数据多维统计
 - 预处理：以直播表 unionid 匹配全部学员名单，回填期名称到最后一列
-- 按渠道统计到播人数、有效观看人数，写入数据汇总
+- 按渠道统计到播人数、有效观看人数，写入数据汇总（公式形式）
 """
 
 from feishu_client import (
     find_sheet_by_name,
-    read_sheet_values, write_sheet_values
+    read_sheet_values, write_sheet_values, write_formula_values
 )
 from task3_dedup_merge import col_letter
 
@@ -24,6 +24,7 @@ LIVE_CONFIG = [
     ("直播1", 12),  # M列起
     ("直播2", 18),  # S列起
     ("直播3", 24),  # Y列起
+    ("直播4", 30),  # AE列起
 ]
 
 # 渠道行配置（行号, 模式, 关键词）
@@ -37,6 +38,7 @@ CHANNEL_ROWS = [
     (10, "exact",   {"未匹配到渠道", "未知渠道"}),  # 两种值都归入未知渠道
 ]
 EXACT_CHANNELS = {"芳群（二维码）", "雪楠（二维码）", "未匹配到渠道"}
+_EXCL_CHANNELS = sorted(EXACT_CHANNELS)
 
 VALID_WATCH_MINUTES = 30  # 有效观看阈值
 
@@ -94,6 +96,30 @@ def _detect_dur_col(header: list, data: list, uid_col: int) -> int:
     return L_COL_DURATION
 
 
+def _build_arrive_formula(sn: str, pc: str, mode: str, keyword) -> str:
+    """构建到播人数公式"""
+    excl = "".join(f',{sn}!{pc}:{pc},"<>{ch}"' for ch in _EXCL_CHANNELS)
+    if mode == "keyword":
+        return f'=COUNTIFS({sn}!{pc}:{pc},"*{keyword}*"{excl})'
+    else:
+        if isinstance(keyword, (set, list, tuple)):
+            parts = [f'COUNTIF({sn}!{pc}:{pc},"{kw}")' for kw in sorted(keyword)]
+            return "=" + "+".join(parts)
+        return f'=COUNTIF({sn}!{pc}:{pc},"{keyword}")'
+
+
+def _build_valid_formula(sn: str, pc: str, dc: str, mode: str, keyword) -> str:
+    """构建有效观看公式（时长 > 30 分钟）"""
+    excl = "".join(f',{sn}!{pc}:{pc},"<>{ch}"' for ch in _EXCL_CHANNELS)
+    if mode == "keyword":
+        return f'=COUNTIFS({sn}!{pc}:{pc},"*{keyword}*"{excl},{sn}!{dc}:{dc},">30")'
+    else:
+        if isinstance(keyword, (set, list, tuple)):
+            parts = [f'COUNTIFS({sn}!{pc}:{pc},"{kw}",{sn}!{dc}:{dc},">30")' for kw in sorted(keyword)]
+            return "=" + "+".join(parts)
+        return f'=COUNTIFS({sn}!{pc}:{pc},"{keyword}",{sn}!{dc}:{dc},">30")'
+
+
 def task6_live_stats(spreadsheet_token: str):
     print("\n[任务6] 开始处理...")
 
@@ -108,7 +134,7 @@ def task6_live_stats(spreadsheet_token: str):
             uid_to_period[uid] = period
     print(f"全部学员名单 uid 映射：{len(uid_to_period)} 条")
 
-    # 读取数据汇总 D 列（公开课助教添加人数），用作分母
+    # 读取数据汇总 D 列（公开课助教添加人数），用作打印日志的分母
     s_sheet = find_sheet_by_name(spreadsheet_token, "数据汇总")
     s_sid = s_sheet["sheet_id"]
     s_rows = read_sheet_values(spreadsheet_token, s_sid, "A1:AE12")
@@ -145,7 +171,7 @@ def task6_live_stats(spreadsheet_token: str):
         dur_header = l_header[dur_col] if dur_col < len(l_header) else '?'
         print(f"  uid列={uid_col}({uid_header}), 时长列={dur_col}({dur_header})")
 
-        # 步骤1：预处理回填期名称到最后一列（新增列）
+        # 步骤1：预处理回填期名称到最后一列（新增列，写值）
         last_col = len(l_header)
         while last_col > 0 and not l_header[last_col - 1]:
             last_col -= 1
@@ -170,7 +196,7 @@ def task6_live_stats(spreadsheet_token: str):
                            period_values)
         print(f"  期名称回填完成")
 
-        # 步骤2：按渠道统计到播人数和有效观看人数
+        # 步骤2：按渠道统计到播人数和有效观看人数（打印日志用 Python 计算，结果写公式）
         row_data = []
         for i, row in enumerate(l_data):
             period = period_values[i][0]
@@ -180,37 +206,47 @@ def task6_live_stats(spreadsheet_token: str):
                 duration = 0
             row_data.append((period, duration))
 
-        result_rows = {}
+        # 公式参数
+        sn = f"'{live_name}'"
+        pc = new_col_letter          # 期名称列字母
+        dc = col_letter(dur_col)     # 时长列字母
+        ac = col_letter(col_start)   # 到播数列字母（写入目标）
+        vc = col_letter(col_start+2) # 有效观看列字母（写入目标）
+
         total_arrive = 0
         total_valid = 0
 
         for feishu_row, mode, keyword in CHANNEL_ROWS:
+            # Python 计算（打印）
             arrive = sum(1 for p, _ in row_data if match_period(p, mode, keyword))
             valid = sum(1 for p, d in row_data if match_period(p, mode, keyword) and d > VALID_WATCH_MINUTES)
             d_base = d_col.get(feishu_row, 0)
             arrive_rate = f"{arrive/d_base*100:.1f}%" if d_base > 0 else "/"
             valid_rate = f"{valid/d_base*100:.1f}%" if d_base > 0 else "/"
-            result_rows[feishu_row] = [arrive, arrive_rate, valid, valid_rate, 0, 0]
             total_arrive += arrive
             total_valid += valid
             print(f"  行{feishu_row}: 到播={arrive}({arrive_rate}), 有效观看={valid}({valid_rate})")
 
-        d_total = d_col.get(11, 0)
-        result_rows[11] = [
-            total_arrive,
-            f"{total_arrive/d_total*100:.1f}%" if d_total > 0 else "/",
-            total_valid,
-            f"{total_valid/d_total*100:.1f}%" if d_total > 0 else "/",
-            0, 0
-        ]
+            # 写入公式
+            arrive_f = _build_arrive_formula(sn, pc, mode, keyword)
+            valid_f = _build_valid_formula(sn, pc, dc, mode, keyword)
+            arrive_rate_f = f'=IF(D{feishu_row}>0,TEXT({ac}{feishu_row}/D{feishu_row},"0.0%"),"/")'
+            valid_rate_f  = f'=IF(D{feishu_row}>0,TEXT({vc}{feishu_row}/D{feishu_row},"0.0%"),"/")'
+            write_formula_values(spreadsheet_token, s_sid,
+                                 f"{col_letter(col_start)}{feishu_row}:{col_letter(col_start+5)}{feishu_row}",
+                                 [[arrive_f, arrive_rate_f, valid_f, valid_rate_f, 0, 0]])
+
+        # 合计行（第11行）
         print(f"  合计: 到播={total_arrive}, 有效观看={total_valid}")
+        arrive_total_f = f'=SUM({ac}4:{ac}10)'
+        valid_total_f  = f'=SUM({vc}4:{vc}10)'
+        arrive_rate_f  = f'=IF(D11>0,TEXT({ac}11/D11,"0.0%"),"/")'
+        valid_rate_f   = f'=IF(D11>0,TEXT({vc}11/D11,"0.0%"),"/")'
+        write_formula_values(spreadsheet_token, s_sid,
+                             f"{col_letter(col_start)}11:{col_letter(col_start+5)}11",
+                             [[arrive_total_f, arrive_rate_f, valid_total_f, valid_rate_f, 0, 0]])
 
-        for feishu_row, vals in result_rows.items():
-            write_sheet_values(spreadsheet_token, s_sid,
-                               f"{col_letter(col_start)}{feishu_row}:{col_letter(col_start+5)}{feishu_row}",
-                               [vals])
-
-        print(f"  已写入数据汇总 {col_letter(col_start)}-{col_letter(col_start+5)} 列")
+        print(f"  已写入数据汇总 {col_letter(col_start)}-{col_letter(col_start+5)} 列（公式）")
 
     print(f"\n[任务6] 完成！")
 

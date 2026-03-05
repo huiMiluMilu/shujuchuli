@@ -96,6 +96,29 @@ def read_sheet_values(spreadsheet_token: str, sheet_id: str, range_str: str = No
     return data["data"]["valueRange"].get("values", [])
 
 
+def write_formula_values(spreadsheet_token: str, sheet_id: str, range_str: str, values: list[list]):
+    """
+    写入公式或值。values 中以 '=' 开头的字符串会被识别为公式，
+    其余值（数字/普通字符串）保持原样。
+    """
+    range_param = f"{sheet_id}!{range_str}"
+    url = f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values"
+
+    def to_cell(v):
+        if isinstance(v, str) and v.startswith("="):
+            return {"type": "formula", "text": v}
+        return v
+
+    converted = [[to_cell(c) for c in row] for row in values]
+    payload = {"valueRange": {"range": range_param, "values": converted}}
+    resp = requests.put(url, headers=_headers(), json=payload)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("code") != 0:
+        raise RuntimeError(f"写入公式失败: {data}")
+    return data
+
+
 def write_sheet_values(spreadsheet_token: str, sheet_id: str, range_str: str, values: list[list]):
     """
     写入子表格数据。

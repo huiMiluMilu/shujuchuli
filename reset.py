@@ -88,14 +88,14 @@ def reset_task5(token):
 
 
 def reset_task6(token):
-    """清空数据汇总 M-X 列，清空直播表回填的期名称列"""
-    print("  清空数据汇总 M-X 列...")
+    """清空数据汇总 M-AJ 列，清空直播表回填的期名称列"""
+    print("  清空数据汇总 M-AJ 列...")
     s_sheet = find_sheet_by_name(token, "数据汇总")
     s_sid = s_sheet["sheet_id"]
     for row in list(range(4, 11)) + [11]:
-        write_sheet_values(token, s_sid, f"M{row}:X{row}", [[""] * 12])
+        write_sheet_values(token, s_sid, f"M{row}:AJ{row}", [[""] * 24])
 
-    for live_name in ["直播1", "直播2", "直播3"]:
+    for live_name in ["直播1", "直播2", "直播3", "直播4"]:
         try:
             l_sheet = find_sheet_by_name(token, live_name)
             l_sid = l_sheet["sheet_id"]
